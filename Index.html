@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Fire & Water - P2P Rooms</title>
+    <!-- PeerJS for Serverless WebRTC P2P Rooms -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Room Overlay -->
+    <div id="room-overlay">
+        <h2 class="title">P2P Multiplayer Room</h2>
+        
+        <div class="room-card">
+            <h3>Host a Room</h3>
+            <button class="room-btn" id="btn-create-room">Create Room (Fireboy)</button>
+            <p id="host-code-display" class="host-code-text">
+                Room Code: <b id="room-code-val">---</b><br>
+                <span>Waiting for partner to join...</span>
+            </p>
+        </div>
+
+        <div class="room-card">
+            <h3>Join a Room</h3>
+            <input type="text" id="join-code-input" placeholder="ENTER CODE" maxlength="6">
+            <button class="room-btn water-theme" id="btn-join-room">Join Room (Watergirl)</button>
+        </div>
+        <p id="status-text"></p>
+    </div>
+
+    <!-- Main Game View -->
+    <div id="game-container">
+        <div id="ui-header">
+            <span>ROLE: <span id="my-role-badge" class="role-badge role-fire">FIRE</span></span>
+            <span id="level-display">LEVEL 1 / 40</span>
+            <button id="btn-level-menu">LEVELS</button>
+        </div>
+
+        <div id="level-select-modal" class="hidden">
+            <div class="modal-title">Select Stage</div>
+            <div class="level-grid" id="level-grid-container"></div>
+        </div>
+
+        <canvas id="gameCanvas" width="800" height="450"></canvas>
+    </div>
+
+    <!-- On-screen Touch Controls -->
+    <div class="controls-container">
+        <button class="btn fire-bg" id="btn-left">◄</button>
+        <button class="btn fire-bg" id="btn-right">►</button>
+        <button class="btn fire-bg" id="btn-jump">▲</button>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
