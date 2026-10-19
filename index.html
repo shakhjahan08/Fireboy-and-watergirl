@@ -13,6 +13,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px;fl
 canvas{width:100%;height:auto;display:block;border:1px solid #557e56;border-radius:14px;background:#9adf9a;touch-action:none}
 .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}button,input{font:inherit;border-radius:10px;border:1px solid #52785d;padding:10px 12px;background:#244632;color:white;min-height:44px}button{cursor:pointer}button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.selected,.primary{background:#3d7950;border-color:#a7ef75}input{min-width:0;width:min(180px,100%)}.muted{font-size:12px;color:var(--muted);line-height:1.5}.status{font-size:14px;color:#d9f6c9;min-height:22px}.controls{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px}.controls button{font-size:17px}.players{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.players button{flex:1}.notice{background:#263e2d;border-radius:10px;padding:10px;font-size:13px;line-height:1.45;color:#d5e9d5}.footer{font-size:12px;color:#a9c5ad;text-align:center;padding:6px}
 @media(max-width:420px){body{padding:8px}.panel,header{padding:11px}.controls button{padding:8px 4px;font-size:15px}}
+.room-info{margin:10px 0;padding:12px;border:1px solid #cfe7d0;border-radius:14px;background:#f5fff4}.player-list{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.player-chip{padding:6px 10px;border-radius:20px;background:#e1f5df;font-size:13px}.secondary{background:#e6eee4;color:#25422e;border:1px solid #c5d8c5;padding:9px 12px;border-radius:10px;font-weight:700}
 </style>
 </head>
 <body>
@@ -40,6 +41,7 @@ canvas{width:100%;height:auto;display:block;border:1px solid #557e56;border-radi
  <p>Создай код комнаты и поделись им с друзьями.</p>
  <div class="row"><button type="button" class="primary" id="createRoom">＋ Создать комнату</button><input id="roomCode" maxlength="6" autocomplete="off" placeholder="Код комнаты" aria-label="Код комнаты"><button type="button" id="joinRoom">Войти</button></div>
  <p class="status" id="roomStatus" aria-live="polite">Подключение к Firebase…</p>
+ <section class="room-info"><strong>Игроки в комнате</strong><div id="playerList" class="player-list">Пока нет игроков</div><button id="leaveRoom" class="secondary">Выйти из комнаты</button></section>
  <p class="muted">Комнату создает один игрок, остальные вводят тот же код. Каждый телефон управляет одним персонажем.</p>
  <div class="notice"><strong>Настройка Firebase:</strong> включи Realtime Database и Anonymous Authentication. Правила базы должны требовать авторизованного пользователя. Инструкции находятся рядом с файлом в сообщении ChatGPT.</div>
 </section>
@@ -74,7 +76,7 @@ const platforms = [
 ];
 const initialGems = [{x:248,y:255},{x:365,y:174},{x:455,y:298},{x:647,y:242},{x:554,y:119}];
 let players = [], gems = initialGems.map(g=>({...g})), selected = 0, held = {}, keys = {};
-let user = null, roomCode = null, mySlot = null, roomUnsubscribe = null, lastSend = 0, joined = false;
+let user = null, roomCode = null, mySlot = null, roomUnsubscribe = null, roomMetaUnsubscribe = null, lastSend = 0, joined = false, collected = new Set(), lastGemCheck = 0;
 const localId = () => user?.uid;
 function say(msg){ roomStatus.textContent = msg; }
 function setBadge(msg){ badge.textContent = msg; }
@@ -100,7 +102,9 @@ function applyRemote(snapshot){
    const mine=players[mySlot]; fresh[mySlot]={...mine,owner:localId(),online:true};
  }
  players=fresh.map((p,i)=>p||({...starts[i],vx:0,vy:0,onGround:false,slot:i,owner:null,online:false}));
- const count=Object.values(data).filter(p=>p&&p.slot!==undefined).length;
+ const entries=Object.entries(data).filter(([uid,p])=>p&&Number.isInteger(p.slot));
+ const count=entries.length;
+ document.getElementById('playerList').innerHTML=entries.map(([uid,p])=>'<span class="player-chip">'+emoji[p.slot]+' '+(p.name||names[p.slot]||'Игрок')+(uid===localId()?' · ты':'')+'</span>').join('')||'Пока нет игроков';
  say(`Комната ${roomCode}: игроков ${count}/3. ${mySlot===null?'Выбери персонажа ниже.':'Ты играешь за '+names[mySlot]+'.'}`);
  draw();
 }
@@ -114,7 +118,7 @@ async function connectRoom(code, create){
    if(create){
      const existing=await get(roomRef);
      if(existing.exists()){say('Такая комната уже существует. Нажми «Создать комнату» ещё раз.');return}
-     await set(roomRef,{createdAt:Date.now(),status:'playing'});
+     await set(roomRef,{createdAt:Date.now(),status:'playing',collectedGems:[],won:false});
    } else {
      const existing=await get(roomRef);
      if(!existing.exists()){say('Комната не найдена. Проверь код или попроси друга создать комнату.');return}
@@ -133,6 +137,15 @@ async function connectRoom(code, create){
    await set(pRef,initial);
    await onDisconnect(pRef).remove();
    roomUnsubscribe=onValue(ref(db,`rooms/${code}/players`),applyRemote,err=>say('Ошибка чтения комнаты: '+err.message));
+   if(roomMetaUnsubscribe) roomMetaUnsubscribe();
+   roomMetaUnsubscribe=onValue(ref(db,`rooms/${code}`),snap=>{
+     const meta=snap.val()||{};
+     const list=Array.isArray(meta.collectedGems)?meta.collectedGems:[];
+     collected=new Set(list.map(String));
+     gems=initialGems.map((g,i)=>({...g,index:i})).filter(g=>!collected.has(String(g.index)));
+     statusEl.textContent=meta.won?'🏆 Команда победила! Все кристаллы собраны!':`💎 Осталось кристаллов: ${gems.length}. Собирайте их вместе!`;
+     draw();
+   },err=>console.warn(err));
    joined=true;
    document.getElementById('roomCode').value=code;
    say(`Подключено к комнате ${code}. Ты играешь за ${names[slot]}. Поделись кодом с друзьями.`);
@@ -158,6 +171,17 @@ document.querySelectorAll('[data-control]').forEach(b=>{const action=b.dataset.c
 window.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','ArrowUp',' '].includes(e.key))e.preventDefault();keys[e.key.toLowerCase()]=true},{passive:false});
 window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);window.addEventListener('blur',()=>{keys={};held={}});
 document.getElementById('restart').addEventListener('click',()=>{if(mySlot!==null){const p=players[mySlot];if(p){p.x=starts[mySlot].x;p.y=starts[mySlot].y;p.vx=0;p.vy=0}}else resetLocal();});
+document.getElementById('leaveRoom').addEventListener('click',async()=>{
+ try{
+  if(roomUnsubscribe){roomUnsubscribe();roomUnsubscribe=null}
+  if(roomMetaUnsubscribe){roomMetaUnsubscribe();roomMetaUnsubscribe=null}
+  if(joined&&roomCode&&user) await set(ref(db,`rooms/${roomCode}/players/${user.uid}`),null);
+ }catch(e){console.warn(e)}
+ roomCode=null;mySlot=null;joined=false;collected=new Set();resetLocal();setBadge('FIREBASE · готов');
+ say('Ты вышел из комнаты. Создай новую или введи код другой комнаты.');
+ document.getElementById('playerList').textContent='Пока нет игроков';
+});
+
 function step(){
  if(mySlot!==null && joined && players[mySlot]){
   const p=players[mySlot];
@@ -168,6 +192,22 @@ function step(){
   for(const f of platforms){if(p.x+23>f.x&&p.x+2<f.x+f.w&&oldBottom<=f.y+5&&p.y+27>=f.y&&p.vy>=0){p.y=f.y-27;p.vy=0;p.onGround=true}}
   if(p.y>440){p.x=starts[mySlot].x;p.y=starts[mySlot].y;p.vy=0}
   const now=Date.now();
+  if(now-lastGemCheck>180){
+    lastGemCheck=now;
+    for(const g of gems){
+      if(Math.abs((p.x+12)-g.x)<18&&Math.abs((p.y+13)-g.y)<18){
+        const key=String(g.index);
+        runTransaction(ref(db,`rooms/${roomCode}/collectedGems`),current=>{
+          const arr=Array.isArray(current)?current:[];
+          if(!arr.includes(key)) arr.push(key);
+          return arr;
+        }).then(async result=>{
+          const arr=Array.isArray(result.snapshot.val())?result.snapshot.val():[];
+          if(arr.length>=initialGems.length) await update(ref(db,`rooms/${roomCode}`),{won:true});
+        }).catch(err=>console.warn('Gem transaction:',err));
+      }
+    }
+  }
   if(now-lastSend>90){lastSend=now;update(ref(db,`rooms/${roomCode}/players/${user.uid}`),{x:Math.round(p.x),y:Math.round(p.y),lastSeen:now}).catch(err=>console.warn(err))}
  } else if(!joined){
    const p=players[selected];
